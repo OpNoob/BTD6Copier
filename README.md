@@ -1,2 +1,2 @@
 # BTD6Copier
-Copies moves froma youtube video
+Copies moves from a youtube video
