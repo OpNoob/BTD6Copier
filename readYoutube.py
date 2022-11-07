@@ -91,16 +91,11 @@ def scale(img):
         resize_w = stream_w / original_w
 
         h, w = img.shape
-        print(h, w)
 
         new_h = h * resize_h
         new_w = w * resize_w
         dim = (round(new_w), round(new_h))
-        # print(dim)
         resized = cv2.resize(img, dim, interpolation=cv2.INTER_LANCZOS4)  # cv2.INTER_AREA
-        # cv2.imshow("Resized image", resized)
-        # cv2.waitKey(0)
-        # exit(1)
         return resized
     else:
         return img
