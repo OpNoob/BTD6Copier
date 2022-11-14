@@ -17,6 +17,9 @@ from collections import defaultdict
 
 import math
 from win32gui import FindWindow, GetClientRect, GetWindowRect
+from Utils import Utils
+from Events import *
+from StreamUtils import ReadYoutube
 
 
 class SearchLocation:
@@ -33,9 +36,9 @@ class SearchLocation:
         return self.bottom - self.top
 
 
-class BotUtils:
+class BotUtils(Utils):
     def __init__(self):
-
+        Utils.__init__(self)
         try:
             if sys.platform == "win32":
                 ctypes.windll.shcore.SetProcessDpiAwareness(2)  # DPI indipendent
@@ -55,63 +58,28 @@ class BotUtils:
             self.left, self.top, self.right, self.bottom = game_rect
             self.width = self.right - self.left
             self.height = self.bottom - self.top
+
+            # Mouse
+            self._previous_click = None
+
+            # Fast forward
+            self._previous_fast_forward = None
         except Exception as e:
             raise Exception("Could not retrieve monitor resolution")
-
-        self.support_dir = self.get_resource_dir("assets")
-
-        # Defing a lamda function that can be used to get a path to a specific image
-        # self._image_path = lambda image, root_dir=self.support_dir, height=self.height : root_dir/f"{height}_{image}.png"
-        self._image_path = lambda image, root_dir=self.support_dir: root_dir / f"{image}.png"
-
-    def get_resource_dir(self, path):
-        return Path(__file__).resolve().parent / path
-
-    def save_file(self, data=format(0, 'b'), _file_name="noname", folder="DEBUG", ):
-        directory = Path(__file__).resolve().parent / folder
-
-        if not directory.exists():
-            Path.mkdir(directory)
-
-        with open(directory / _file_name, "wb") as output_file:
-            output_file.write(data)
 
     def _move_mouse(self, location, move_timeout=0.1):
         mouse.move(x=location[0], y=location[1])
         time.sleep(move_timeout)
 
-    def click(self, location: tuple | tuple, amount=1, timeout=0.5, move_timeout=0.1, press_time=0.075):
-        """
-            Method to click on a specific location on the screen
-            @param location: The location to click on
-            @param amount: amount of clicks to be performed
-            @param timeout: time to wait between clicks
-            @param move_timeout: time to wait between move and click
-            @param press_time: time to wait between press and release
-        """
-
-        # If location is a string then assume that its a static button
-        if isinstance(location, str):
-            location = static.button_positions[location]
-
-        # Move mouse to location
-        self._move_mouse(self._scaling(location, offset_left_top=True), move_timeout)
-
-        for _ in range(amount):
-            mouse.press(button='left')
-            time.sleep(
-                press_time)  # https://www.reddit.com/r/AskTechnology/comments/4ne2tv/how_long_does_a_mouse_click_last/ TLDR; dont click too fast otherwise shit will break
-            mouse.release(button='left')
-
-            """
-                We don't need to apply cooldown and slow down the bot on single clicks
-                So we only apply the .1 delay if the bot has to click on the same spot multiple times
-                This is currently used for level selection and levelup screen
-            """
-            if amount > 1:
-                time.sleep(timeout)
-
-        time.sleep(timeout)
+    def _scroll_mouse(self, num_times):
+        if num_times < 0:
+            wheel_dir = -1
+        elif num_times > 0:
+            wheel_dir = 1
+        else:
+            return
+        for i in range(abs(num_times)):
+            mouse.wheel(wheel_dir)
 
     def press_key(self, key, timeout=0.1, amount=1):
         for _ in range(amount):
@@ -127,7 +95,17 @@ class BotUtils:
         if offset_left_top:
             h += self.top
             w += self.left
-        return width, height
+        return w, h
+
+    def _scalePoint(self, x, y, offset_left_top=False):
+        x *= self.width
+        y *= self.height
+
+        if offset_left_top:
+            y += self.top
+            x += self.left
+
+        return x, y
 
     def _load_img(self, img):
 
@@ -157,86 +135,45 @@ class BotUtils:
 
         return img_cv
 
-    def _locate_all(self, template_path, search_location: SearchLocation, confidence=0.9, limit=100, region=None):
-        """
-            Template matching a method to match a template to a screenshot taken with mss.
+    def handleEvent(self, event: Event):
+        if isinstance(event, MouseEvent):
+            if event.click is not self._previous_click:
+                if event.click:
+                    mouse.press(button='left')
+                elif self._previous_click is not None:
+                    mouse.release(button='left')
+                self._previous_click = event.click
+            self._move_mouse(self._scaling(event.x, event.y, offset_left_top=True), 0)
 
-            @template_path - Path to the template image
-            @confidence - A threshold value between {> 0.0f & < 1.0f} (Defaults to 0.9f)
+            # self._move_mouse((event.x + self.left, event.y + self.top))
+        elif isinstance(event, ScrollEvent):
+            # print("scroll: ", event.num_times)
+            self._scroll_mouse(event.num_times)
+        else:
+            pass
 
-            credit: https://github.com/asweigart/pyscreeze/blob/b693ca9b2c964988a7e924a52f73e15db38511a8/pyscreeze/__init__.py#L184
+    def inputEvents(self, events: dict):
+        total_test = 0
 
-            Returns a list of cordinates to where openCV found matches of the template on the screenshot taken
-        """
+        time_stamp_last = 0
+        for ts, events in events.items():
+            sleep_duration = ts - time_stamp_last
+            time_stamp_last = ts
+            time.sleep(sleep_duration)
 
-        monitor = {'top': search_location.top, 'left': search_location.left, 'width': search_location.getWidth(),
-                   'height': search_location.getHeight()} if region is None else region
+            # total_test += sleep_duration
+            # print(total_test, sleep_duration)
 
-        if 0.0 > confidence <= 1.0:
-            raise ValueError("Confidence must be a value between 0.0 and 1.0")
-
-        with mss.mss() as sct:
-
-            # Load the taken screenshot into a opencv img object
-            img = np.array(sct.grab(monitor))
-            screenshot = self._load_img(img)
-
-            if region:
-                screenshot = screenshot[region[1]:region[1] + region[3],
-                             region[0]:region[0] + region[2]
-                             ]
-            else:
-                region = (0, 0)
-            # Load the template image
-            template = self._load_img(template_path)
-
-            confidence = float(confidence)
-
-            # width & height of the template
-            templateHeight, templateWidth = template.shape[:2]
-
-            # scale template
-            if self.width != 1920 or self.height != 1080:
-                template = cv2.resize(template, dsize=(
-                    int(templateWidth / (1920 / self.width)), int(templateHeight / (1080 / self.height))),
-                                      interpolation=cv2.INTER_CUBIC)
-
-            # Find all the matches
-            # https://stackoverflow.com/questions/7670112/finding-a-subimage-inside-a-numpy-image/9253805#9253805
-            result = cv2.matchTemplate(screenshot, template,
-                                       cv2.TM_CCOEFF_NORMED)  # heatmap of the template and the screenshot"
-            match_indices = np.arange(result.size)[(result > confidence).flatten()]
-            matches = np.unravel_index(match_indices[:limit], result.shape)
-
-            # Defining the coordinates of the matched region
-            matchesX = matches[1] * 1 + region[0]
-            matchesY = matches[0] * 1 + region[1]
-
-            if len(matches[0]) == 0:
-                return None
-            else:
-                return [(x + self.left, y + self.top, templateWidth, templateHeight) for x, y in
-                        zip(matchesX, matchesY)]
-
-    def _locate(self, template_path, confidence=0.9, tries=1):
-        """
-            Locates a template on the screen.
-
-            Note: @tries does not do anything at the moment
-        """
-        result = self._locate_all(template_path, confidence)
-        return result[0] if result is not None else None
+            for e in events:
+                print(ts, e.toDict())
+                self.handleEvent(e)
 
 
 if __name__ == "__main__":
-    import time
-
+    delay = 5
+    print(f"Sleeping for {delay} seconds")
+    time.sleep(delay)
+    print("Starting...")
     inst = BotUtils()
-    inst.log = print
-    inst.DEBUG = True
-    time.sleep(2)
-
-    print(inst.getRound())
-
-    # res = inst._locate(inst._image_path("obyn"), confidence=0.9)
-    # print(res)
+    ry = ReadYoutube(None, load_from_pickle="data/test.pkl")
+    inst.inputEvents(ry.events.sort())

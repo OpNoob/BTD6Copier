@@ -97,3 +97,9 @@ class Events:
         return {
             ts: [e.toDict() for e in events] for ts, events in self.data.items()
         }
+
+    def sort(self):
+        self.data = dict(sorted(self.data.items()))
+        return self.data
+
+

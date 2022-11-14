@@ -195,3 +195,28 @@ def motionTrack(self, image_gray_previous, image_gray, image_write=None):
                     break
         cap.release()
         cv2.destroyAllWindows()
+
+points = self._find_scroll(image_gray, image_write=image_write)
+if self._points_previous is not None:
+    y_shift = 0
+    match_count = 0
+    for index, (found_x, found_y, _, _) in points.items():
+        if index in self._points_previous:
+            (previous_x, previous_y, _, _) = self._points_previous[index]
+            y_shift += previous_y - found_y
+            match_count += 1
+    if match_count != 0:
+        y_shift /= match_count
+
+    single_scroll_pixel_shift = static.pixels_scroll * self.height
+
+    if y_shift > single_scroll_pixel_shift / 2:
+        self._scroll_pixel_total += y_shift
+
+    num_scrolls = round(self._scroll_pixel_total / single_scroll_pixel_shift)
+    if num_scrolls > self._limit_scroll:
+        num_scrolls = self._limit_scroll
+    scroll_add = num_scrolls - self._scroll_previous
+    self._scroll_previous = num_scrolls
+    # print("scroll_add: ", scroll_add)
+self._points_previous = points

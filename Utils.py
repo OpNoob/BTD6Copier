@@ -95,6 +95,9 @@ class Utils:
 
         return x_center, y_center
 
+    def _getSquare(self, location):
+        return (location[0], location[1]), (location[0] + location[2], location[1] + location[3])
+
     def _locate(self, image, template_image, confidence: float = 0.9,
                 image_write=None, draw_image_write=False):
         """

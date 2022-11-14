@@ -7,6 +7,8 @@ search_locations = {
 monkey_grid = ((0.861875, 0.138888888), (0.980625, 0.878888888)) # ((x1, y1), (x2, y2))
 monkey_item = (0.05375, 0.11111111)
 pixels_scroll = 0.05666666666
+mouse_normal_shift = (5, 3)
+mouse_click_shift = (5, 5)
 
 window_title = "BloonsTD6"
 
