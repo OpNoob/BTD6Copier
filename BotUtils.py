@@ -135,34 +135,65 @@ class BotUtils(Utils):
 
         return img_cv
 
+    def _getImageSearch(self, norm_area: tuple[tuple, tuple], offset_left_top=False):
+        area = self._scaleStatic(norm_area)
+
+        top, left, width, height = self._getLocation(area)
+        if offset_left_top:
+            top += self.top
+            left += self.left
+
+        monitor = {'top': top, 'left': left, 'width': width, 'height': height}
+
+        # Take Screenshot
+        with mss.mss() as sct:
+            sct_image = sct.grab(monitor)
+            screenshot = np.array(sct_image, dtype=np.uint8)
+
+            return screenshot
+
+    def getRound(self):
+        img_bgr = self._getImageSearch(static.round_area, offset_left_top=True)
+        r = self._getRound(img_bgr, image_write=img_bgr)
+        return r
+
+    def waitForRound(self, round_num):
+        self.getRound()
+        print("round: ", self._previous_round)
+        while self._previous_round is None or round_num > self._previous_round:
+            time.sleep(0.1)
+            self.getRound()
+            print("round: ", self._previous_round)
+
     def handleEvent(self, event: Event):
-        if isinstance(event, MouseEvent):
+        if isinstance(event, RoundChangeEvent):
+            self.waitForRound(event.num)
+
+        elif isinstance(event, MouseEvent):
+            if event.click:
+                self._move_mouse(self._scaling(event.x, event.y, offset_left_top=True), 0)
             if event.click is not self._previous_click:
                 if event.click:
                     mouse.press(button='left')
-                elif self._previous_click is not None:
-                    mouse.release(button='left')
+                else:
+                    if self._previous_click is not None:
+                        mouse.release(button='left')
                 self._previous_click = event.click
-            self._move_mouse(self._scaling(event.x, event.y, offset_left_top=True), 0)
+            if not event.click:
+                self._move_mouse(self._scaling(event.x, event.y, offset_left_top=True), 0)
 
-            # self._move_mouse((event.x + self.left, event.y + self.top))
         elif isinstance(event, ScrollEvent):
-            # print("scroll: ", event.num_times)
             self._scroll_mouse(event.num_times)
+
         else:
             pass
 
     def inputEvents(self, events: dict):
-        total_test = 0
-
         time_stamp_last = 0
         for ts, events in events.items():
             sleep_duration = ts - time_stamp_last
             time_stamp_last = ts
             time.sleep(sleep_duration)
-
-            # total_test += sleep_duration
-            # print(total_test, sleep_duration)
 
             for e in events:
                 print(ts, e.toDict())
@@ -170,10 +201,11 @@ class BotUtils(Utils):
 
 
 if __name__ == "__main__":
-    delay = 5
+    delay = 1
     print(f"Sleeping for {delay} seconds")
     time.sleep(delay)
     print("Starting...")
     inst = BotUtils()
-    ry = ReadYoutube(None, load_from_pickle="data/test.pkl")
+    # ry = ReadYoutube(None, load_from_pickle="data/test.pkl")
+    ry = ReadYoutube(None, load_from_pickle="data/Bloons TD 6 - Flooded Valley - Medium.pkl")
     inst.inputEvents(ry.events.sort())

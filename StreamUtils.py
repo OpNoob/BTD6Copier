@@ -14,18 +14,19 @@ from Events import *
 from MonkeyGrid import MonkeyImage, MonkeyGrid
 
 import cap_from_youtube
+import YoutubeHandler
 import cv2
 import numpy as np
 from tqdm import tqdm
 
 
 class StreamUtils(Utils):
-    def __init__(self, thresh=200, search_mouse_pixels=200):
+    def __init__(self, thresh=200):
         Utils.__init__(self)
 
         # Static variables
         self.thresh = thresh
-        self.search_mouse_pixels = search_mouse_pixels
+        self.search_mouse_pixels = static.search_mouse_pixels
 
         # Set images
         self._mouse_normal_template = self._load_image("mouse 1080p", image_path=True)
@@ -70,6 +71,26 @@ class StreamUtils(Utils):
 
         # Fast forward
         self._fast_forward = None
+
+        # Round
+        self._last_round = None
+
+    def _getImageSearch(self, image, norm_area: tuple[tuple, tuple]):
+        area = self._scaleStatic(norm_area)
+        image_search = image[area[0][1]: area[1][1], area[0][0]:area[1][0]]
+        return image_search
+
+    def getRoundEvent(self, img_bgr, image_write=None):
+        img = self._getImageSearch(img_bgr, static.round_area)
+        if image_write is not None:
+            image_write = self._getImageSearch(image_write, static.round_area)
+
+        r = self._getRound(img, image_write=image_write)
+        if r is None:
+            return
+        if self._last_round is None or self._last_round != r:
+            self._last_round = r
+            return RoundChangeEvent(r)
 
     def _getOutline(self, img_gray):
         # return img_gray
@@ -125,20 +146,6 @@ class StreamUtils(Utils):
         # img_bin = cv2.erode(img_bin, kernel, iterations=1)
 
         return img_bin
-
-    def _scaleStatic(self, area: tuple[tuple, tuple], integer=True):
-        scaled_area = ((self.width * area[0][0]), self.height * area[0][1]), (
-            self.width * area[1][0], self.height * area[1][1])
-        if integer:
-            scaled_area = (
-                (round(scaled_area[0][0]), round(scaled_area[0][1])),
-                (round(scaled_area[1][0]), round(scaled_area[1][1])))
-        return scaled_area
-
-    def _getImageSearch(self, image, norm_area: tuple[tuple, tuple]):
-        area = self._scaleStatic(norm_area)
-        image_search = image[area[0][1]: area[1][1], area[0][0]:area[1][0]]
-        return image_search
 
     def check_play(self, image_gray):
         return self._find(self._getImageSearch(image_gray, static.search_locations["play"]), self._play_template)
@@ -207,7 +214,7 @@ class StreamUtils(Utils):
 
         if image_write is not None:
             h, w = image_gray.shape[:2]
-            cv2.rectangle(image_write, (1, 1), (w-1, h-1), (255, 255, 255), 2)
+            cv2.rectangle(image_write, (1, 1), (w - 1, h - 1), (255, 255, 255), 2)
 
         found_points = dict()
         # Iterative processing
@@ -222,7 +229,8 @@ class StreamUtils(Utils):
         # Loop over template images
         for index, monkey_dat in enumerate(self._monkey_list_enabled_templates):
             image_template = monkey_dat.image_data
-            t = threading.Thread(target=self._locate_multi, args=(index, found_points, image_gray, image_template, image_write))
+            t = threading.Thread(target=self._locate_multi,
+                                 args=(index, found_points, image_gray, image_template, image_write))
             threads.append(t)
 
             if image_write is not None:
@@ -252,9 +260,12 @@ class StreamUtils(Utils):
         self.mouse_click_template_w, self.mouse_click_template_h = self.mouse_click_template.shape[::-1]
 
         # Searching pixels for mouse (So no need to search in all the image)
-        self.search_pixels = round(self.search_mouse_pixels * self.height / static.base_resolution_height)
+        self.search_pixels = self._getMouseDistance(self.search_mouse_pixels)
 
         # return MouseEvent()
+
+    def _getMouseDistance(self, search_mouse_pixels):
+        return round(search_mouse_pixels * self.height / static.base_resolution_height)
 
     def getMouseEvent(self, frame_gray, frame_write=None, normalise=False):
         if self._search_area is None:
@@ -320,9 +331,27 @@ class StreamUtils(Utils):
 
         # Get point on game screen
         point_on_game = (point_shifted[0] + x_add, point_shifted[1] + y_add)
+
+        if self._current_mouse_position is not None:
+            point_distance = math.dist(self._current_mouse_position, point_on_game)
+
+            # Handles search area expansion
+            new_search_pixels = self._getMouseDistance(point_distance * static.mouse_expand_speed)  # point_distance * static.mouse_expand_speed
+            static_search_pixel = self._getMouseDistance(self.search_mouse_pixels)
+            static_search_pixel_max = self._getMouseDistance(static.search_mouse_pixels_max)
+            if static_search_pixel > new_search_pixels:
+                self.search_pixels = static_search_pixel
+            elif static_search_pixel_max < new_search_pixels:
+                self.search_pixels = static_search_pixel_max
+            else:
+                self.search_pixels = new_search_pixels
+
         self._current_mouse_position = point_on_game
+
         # Check if new mouse event
-        if click or self._previous_mouse_click is not click or (self.check_mouse_in_scroll(point_on_game) and self._thresh_mouse_move < math.dist(self._previous_mouse_point, point_on_game)):
+        if click or self._previous_mouse_click is not click or (
+                self.check_mouse_in_scroll(point_on_game) and self._thresh_mouse_move < math.dist(
+            self._previous_mouse_point, point_on_game)):
             self._previous_mouse_point = point_on_game
             self._previous_mouse_click = click
 
@@ -384,7 +413,13 @@ class StreamUtils(Utils):
             if abs(scroll_add) > 0:
                 return ScrollEvent(scroll_add * -1)
 
-    def getEvents(self, events: Events, time_stamp, image_gray, pbar=None, image_write=None):
+    def getEvents(self, events: Events, time_stamp, image_bgr, pbar=None, image_write=None):
+        image_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+
+        # Round
+        round_event = self.getRoundEvent(image_bgr, image_write=image_write)
+        events.addEvent(time_stamp, round_event)
+
         # # Fast-forward check
         # fast_forward_event = self.getFastForwardEvent(image_gray, image_write=image_write)
         # events.addEvent(time_stamp, fast_forward_event)
@@ -403,9 +438,17 @@ class StreamUtils(Utils):
 
 class ReadYoutube:
     def __init__(self, youtube_url,
+                 directory="data",
+                 title=None,
                  resolution="1080p60",
-                 load_from_pickle=None,
-                 save_pickle_path=None, save_json_path=None, periodic_saves=60):
+                 load_previous=False, load_from_pickle=None,
+                 save_json=True,
+                 periodic_saves=60,
+                 download=False,
+                 start_seconds=0, ):
+
+        assert not (load_from_pickle is not None and load_previous is True)  # these two variables cannot both be set
+
         if load_from_pickle is not None:
             if self.load(load_from_pickle):
                 return
@@ -416,19 +459,37 @@ class ReadYoutube:
         self.events = Events()
 
         # Flags and analysis variables
-        self.frame_no = 0
+        self.frame_no = None
         self.finished = False
         self.resolution = resolution
 
         self.periodic_saves = periodic_saves
-        self._save_pickle_path = save_pickle_path
-        self._save_json_path = save_json_path
+        self.start_seconds = start_seconds
 
+        self._directory = directory
+
+        # Start stream to extract height and width
+        yi = YoutubeHandler.YtInfo(self.youtube_url, download=download)
+        if title is None:
+            title = yi.title
+        self.stream = yi.getStream(self.resolution)
+        if self.stream is None:
+            raise ValueError(f'Resolution {self.resolution} not available')
+
+        # Set file paths
+        self._save_pickle_path = os.path.join(self._directory, title + ".pkl")
+        if save_json:
+            self._save_json_path = os.path.join(self._directory, title + ".json")
+        else:
+            self._save_json_path = None
+        # Continue analysis (load previous)
+        if load_previous:
+            if self.load(self._save_pickle_path):
+                return
+
+        # Time
         self.time_start = None
         self.time_elapsed = None
-
-        self.time_start = None
-
         self.resetTimer()
 
     def load(self, path=None):
@@ -473,37 +534,36 @@ class ReadYoutube:
     def _setTime(self):
         self.time_elapsed = time.time() - self.time_start
 
-    def analyse(self, stream_utils=None, show_frames=True, rescale_show_frames=(960, 540), start_seconds=None):
+    def analyse(self, stream_utils=None, show_frames=True, rescale_show_frames=(960, 540), download=False):
         if stream_utils is None:  # If class not inputted, then create new instance
             stream_utils = StreamUtils()
         else:
             stream_utils = stream_utils
 
-        # Start stream to extract height and width
-        streams, resolutions = cap_from_youtube.list_video_streams(self.youtube_url)
-        if self.resolution in resolutions:
-            res_index = np.where(resolutions == self.resolution)[0][0]
-            stream_url = streams[res_index].url
-            print("stream_url: ", stream_url)
-            cap = cv2.VideoCapture(stream_url)
-        else:
-            raise ValueError(f'Resolution {self.resolution} not available')
+        # stream_utils.width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        # stream_utils.height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        # Currently only allows 1080p
+        stream_utils.width = 1920
+        stream_utils.height = 1080
+
+        stream_utils.setMouseScaling()
+
+        print("stream_url: ", self.stream.url)
+        cap = cv2.VideoCapture(self.stream.url)
 
         # Skip to desired testing
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        stream_utils.width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        stream_utils.height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-
-        stream_utils.setMouseScaling()
-
         fps = cap.get(cv2.CAP_PROP_FPS)
 
-        if start_seconds is None:
-            start_frame = self.frame_no
+        if self.frame_no is None:
+            if self.start_seconds != 0:
+                self.frame_no = int(self.start_seconds * fps)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_no)
+            else:
+                self.frame_no = 0
         else:
-            start_frame = int(start_seconds * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)  # 8700
+            cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_no)
 
         # Check if started
         started = True
@@ -512,9 +572,13 @@ class ReadYoutube:
         last_save = time.time()
 
         # infinite loop
-        pbar = tqdm(total=frame_count, desc="analysing video", initial=int(start_frame))
+        pbar = tqdm(total=frame_count, desc="analysing video", initial=int(self.frame_no))
         while True:
             ret, frame = cap.read()
+            if self.stream.resolution != "1080p":
+                frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
+                cv2.imshow("f1", frame)
+
             self.frame_no = cap.get(cv2.CAP_PROP_POS_FRAMES) - 1
             time_stamp = self.frame_no / fps  # In seconds
 
@@ -532,7 +596,7 @@ class ReadYoutube:
                 if stream_utils.check_victory(frame_gray):
                     break
 
-                stream_utils.getEvents(self.events, time_stamp, frame_gray, image_write=frame if show_frames else None)
+                stream_utils.getEvents(self.events, time_stamp, frame, image_write=frame if show_frames else None)
                 if self.periodic_saves is not None:
                     if time.time() - last_save > self.periodic_saves:
                         last_save = time.time()
@@ -542,7 +606,7 @@ class ReadYoutube:
                 if rescale_show_frames is not None:
                     frame = cv2.resize(frame, rescale_show_frames, interpolation=cv2.INTER_CUBIC)
                 cv2.imshow("Output Frame", frame)
-                key = cv2.waitKey(1) & 0xFF
+                key = cv2.waitKey(0) & 0xFF
                 if key == ord("q"):
                     self.save()
                     break
@@ -554,33 +618,18 @@ class ReadYoutube:
         self.save()
         self.finished = True
 
-    def continue_analysing(self, pickle_path=None, stream_utils=None, show_frames=True, rescale_show_frames=(960, 540),
-                           start_seconds=None):
-        while not self.finished:
-            try:
-                if pickle_path is None:
-                    pickle_path = self._save_pickle_path
-                if os.path.exists(pickle_path):
-                    print(f"loading from path {pickle_path}")
-                    self.load(pickle_path)
-                    print(f"Starting from frame no #{self.frame_no}")
-                    self.analyse(stream_utils=stream_utils, show_frames=show_frames, rescale_show_frames=rescale_show_frames,
-                                 start_seconds=None)
-                else:
-                    print("Starting new analysis")
-                    self.analyse(stream_utils=stream_utils, show_frames=show_frames, rescale_show_frames=rescale_show_frames,
-                                 start_seconds=start_seconds)
-            except Exception as e:
-                print("ERROR! ", str(e))
-
 
 if __name__ == "__main__":
     su = StreamUtils()
-    ry = ReadYoutube("https://www.youtube.com/watch?v=WzRUjzZeoy8", periodic_saves=60,
-                     save_pickle_path="data/test.pkl", save_json_path="data/test.json")
-    # ry.analyse(stream_utils=su, start_seconds=28)
+    # https://www.youtube.com/watch?v=R3XUmq8_8j0, 2
+    # https://www.youtube.com/watch?v=WzRUjzZeoy8, 28
+    ry = ReadYoutube("https://www.youtube.com/watch?v=fPNVUYP_rpY", periodic_saves=10, save_json=True,
+                     resolution="1080p", start_seconds=0,
+                     load_previous=False, )
+    ry.frame_no = 367
+    ry.analyse(stream_utils=su)
     # close place: 64, 248
     # scroll: 146, 244
     # scroll up: 394
 
-    ry.continue_analysing(stream_utils=su, start_seconds=28)  # 2
+    # ry.continue_analysing(stream_utils=su, start_seconds=0)  # 2

@@ -1,22 +1,7 @@
 from enum import Enum
 
 
-class EventType(Enum):
-    start = 0
-    mouse = 1
-    scroll = 2
-    fast_forward = 3
-
-
 class Event:
-    def __init__(self, typ):
-        self.type = typ
-
-    def toDict(self):
-        return {
-            "type": self.type.name
-        }
-
     def __eq__(self, other):
         if other is None:
             return False
@@ -28,14 +13,13 @@ class MouseEvent(Event):
         self.x = x
         self.y = y
         self.click = click
-        Event.__init__(self, EventType.mouse)
 
     def getPosition(self):
         return self.x, self.y
 
     def toDict(self):
         return {
-            "type": self.type.name,
+            "type": self.__class__.__name__,
             "x": float(self.x),
             "y": float(self.y),
             "click": self.click,
@@ -44,35 +28,41 @@ class MouseEvent(Event):
 
 class ScrollEvent(Event):
     def __init__(self, num_times: int):
-        Event.__init__(self, EventType.scroll)
         self.num_times = num_times
 
     def toDict(self):
         return {
-            "type": self.type.name,
+            "type": self.__class__.__name__,
             "num_times": self.num_times,
         }
 
 
 class StartEvent(Event):
-    def __init__(self):
-        Event.__init__(self, EventType.start)
-
     def toDict(self):
         return {
-            "type": self.type.name,
+            "type": self.__class__.__name__,
         }
 
 
 class FastForwardEvent(Event):
     def __init__(self, on: bool = True):
         self.on = on
-        Event.__init__(self, EventType.fast_forward)
 
     def toDict(self):
         return {
-            "type": self.type.name,
+            "type": self.__class__.__name__,
             "on": self.on,
+        }
+
+
+class RoundChangeEvent(Event):
+    def __init__(self, num):
+        self.num = num
+
+    def toDict(self):
+        return {
+            "type": self.__class__.__name__,
+            "num": self.num,
         }
 
 
@@ -101,5 +91,3 @@ class Events:
     def sort(self):
         self.data = dict(sorted(self.data.items()))
         return self.data
-
-
